@@ -1,0 +1,299 @@
+</main>
+</div>
+
+<!-- ===========================================
+     CHROME DE PRESENTACIÓN (fuera del escenario)
+     =========================================== -->
+<div class="navzone left" id="navLeft" aria-label="Anterior"></div>
+<div class="navzone right" id="navRight" aria-label="Siguiente"></div>
+
+<div class="hud">
+  <button id="btnPrev" title="Anterior (←)">‹</button>
+  <span><b id="curNum">1</b> / <span id="totNum">29</span></span>
+  <button id="btnNext" title="Siguiente (→)">›</button>
+  <button id="btnIndex" title="Índice (O)">☰</button>
+  <button id="btnFull" title="Pantalla completa (F)">⛶</button>
+</div>
+
+<div class="index" id="indexPanel">
+  <h3>Índice de la presentación</h3>
+  <p class="note">Toca una diapositiva para ir a ella · Esc para cerrar</p>
+  <ol id="indexList"></ol>
+</div>
+
+<div class="rotate" id="rotateHint">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#7fc0ef" stroke-width="1.6"><rect x="5" y="2" width="14" height="20" rx="2.5"/><circle cx="12" cy="18.5" r="1" fill="#7fc0ef"/></svg>
+  <p>Gira el teléfono a <b>horizontal</b> para ver la presentación a pantalla completa.</p>
+  <button id="rotateSkip">Ver así de todos modos</button>
+</div>
+
+<div class="edit-hotzone" id="editHotzone"></div>
+<button class="edit-toggle" id="editToggle" title="Modo edición (E)">✏️</button>
+<div class="toast" id="toast"></div>
+
+<style>
+/* === BARRAS APILADAS JBI (dominio por dominio) === */
+.jbi{display:grid;grid-template-columns:560px 1fr;align-items:center;gap:22px}
+.jbi>span{font-family:var(--font-body);font-size:21px;color:var(--navy);text-align:right;line-height:1.25}
+.jbi .track{display:flex;height:34px;border-radius:9px;overflow:hidden;background:#eef4fa;box-shadow:inset 0 0 0 1px #dce7f3}
+.jbi .seg{width:0;transition:width 1s var(--ease);display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-body);font-size:18px;font-weight:700;color:#fff;overflow:hidden}
+.slide.visible .jbi .seg{width:var(--w)}
+.jbi .seg.yes{background:linear-gradient(90deg,var(--blue),var(--blue-bright))}
+.jbi .seg.unc{background:#c6d5e6;color:var(--navy)}
+.jbi .seg.no{background:linear-gradient(90deg,#9478c4,var(--violet))}
+.jbi.hlrow>span{color:var(--violet);font-weight:700}
+.jbi .seg:nth-child(1){transition-delay:.1s}.jbi .seg:nth-child(2){transition-delay:.25s}.jbi .seg:nth-child(3){transition-delay:.4s}
+</style>
+
+<script>
+/* ===========================================
+   CONTROLADOR DE LA PRESENTACIÓN
+   - Escenario fijo 1920×1080 escalado al visor
+   - Teclado, táctil, rueda, zonas de clic
+   - Contadores animados, barras, interruptores
+   - Índice, pantalla completa, edición en línea
+   =========================================== */
+class Deck {
+  constructor(){
+    this.stage   = document.getElementById('deckStage');
+    this.slides  = Array.from(document.querySelectorAll('.slide'));
+    this.current = 0;
+    this.prepareSlides();
+    this.buildJBI();
+    this.buildIndex();
+    this.scaleStage();
+    this.bindNav();
+    this.bindSwitchers();
+    this.show(this.readHash(), true);
+  }
+
+  /* --- Inserta fondo, pie y logo en cada diapositiva --- */
+  prepareSlides(){
+    const logo = window.DECK_LOGO;
+    this.slides.forEach((s,i)=>{
+      const bg=document.createElement('div'); bg.className='slide-bg'; s.prepend(bg);
+      if(!s.dataset.nofoot){
+        const f = document.createElement('div');
+        f.className = 'foot';
+        f.innerHTML = '<img class="deck-logo" alt="Labmédico"><div class="cite">'+(s.dataset.cite||'')+'</div><div class="spacer"></div>';
+        s.appendChild(f);
+      }
+      s.setAttribute('aria-hidden','true');
+    });
+    document.querySelectorAll('img.deck-logo').forEach(img=>{img.src = logo;});
+    document.getElementById('totNum').textContent = this.slides.length;
+  }
+
+  /* --- Construye las barras apiladas de la evaluación JBI --- */
+  buildJBI(){
+    document.querySelectorAll('.jbi').forEach(row=>{
+      const y=+row.dataset.yes, u=+row.dataset.unc, n=+row.dataset.no, t=y+u+n;
+      const track=document.createElement('div'); track.className='track';
+      const mk=(cls,v)=>{const d=document.createElement('div');d.className='seg '+cls;
+        d.style.setProperty('--w',(v/t*100)+'%');d.textContent=v>2?v:'';return d;};
+      track.append(mk('yes',y),mk('unc',u),mk('no',n));
+      row.appendChild(track);
+    });
+  }
+
+  /* --- Índice navegable --- */
+  buildIndex(){
+    const ol=document.getElementById('indexList');
+    this.slides.forEach((s,i)=>{
+      const li=document.createElement('li');
+      li.innerHTML='<i>'+(i+1)+'</i><span>'+(s.dataset.title||'Diapositiva '+(i+1))+'</span>';
+      li.addEventListener('click',()=>{this.show(i);this.toggleIndex(false);});
+      ol.appendChild(li);
+    });
+    this.indexItems=Array.from(ol.children);
+  }
+
+  /* --- Escalado uniforme del escenario (nunca re-maqueta) --- */
+  scaleStage(){
+    const fit=()=>{
+      const vw=window.innerWidth, vh=window.innerHeight;
+      const f=Math.min(vw/1920, vh/1080);
+      const x=(vw-1920*f)/2, y=(vh-1080*f)/2;
+      this.stage.style.transform=`translate(${x}px, ${y}px) scale(${f})`;
+    };
+    fit();
+    window.addEventListener('resize',fit);
+    window.addEventListener('orientationchange',()=>setTimeout(fit,180));
+    if(window.visualViewport) window.visualViewport.addEventListener('resize',fit);
+  }
+
+  readHash(){
+    const n=parseInt((location.hash||'').replace('#',''),10);
+    return (n>=1 && n<=this.slides.length) ? n-1 : 0;
+  }
+
+  /* --- Mostrar una diapositiva --- */
+  show(i, silent){
+    this.current=Math.max(0,Math.min(i,this.slides.length-1));
+    this.slides.forEach((s,k)=>{
+      const on = k===this.current;
+      s.classList.toggle('active',on);
+      s.classList.toggle('visible',on);
+      s.setAttribute('aria-hidden', on?'false':'true');
+    });
+    document.getElementById('curNum').textContent=this.current+1;
+    document.getElementById('progress').style.width=((this.current+1)/this.slides.length*100)+'%';
+    if(this.indexItems) this.indexItems.forEach((li,k)=>li.classList.toggle('cur',k===this.current));
+    if(!silent) history.replaceState(null,'','#'+(this.current+1));
+    this.runCounters(this.slides[this.current]);
+  }
+  next(){ this.show(this.current+1); }
+  prev(){ this.show(this.current-1); }
+
+  /* --- Contadores animados (data-count) --- */
+  runCounters(slide){
+    slide.querySelectorAll('[data-count]').forEach(el=>{
+      const target=parseFloat(el.dataset.count), suffix=el.dataset.suffix||'';
+      const dur=1100, t0=performance.now();
+      const step=now=>{
+        const p=Math.min(1,(now-t0)/dur);
+        const e=1-Math.pow(1-p,3);
+        el.textContent=Math.round(target*e).toLocaleString('es-CO')+suffix;
+        if(p<1) requestAnimationFrame(step);
+      };
+      el.textContent='0'+suffix;
+      requestAnimationFrame(step);
+    });
+  }
+
+  /* --- Interruptores de estado (protector / polimicrobiano) --- */
+  bindSwitchers(){
+    document.querySelectorAll('[data-switch]').forEach(sw=>{
+      const scope=sw.closest('.body-area');
+      sw.querySelectorAll('button').forEach(b=>{
+        b.addEventListener('click',()=>{
+          sw.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+          b.classList.add('on');
+          scope.querySelectorAll('.statepanel').forEach(p=>
+            p.classList.toggle('on', p.dataset.panel===b.dataset.state));
+        });
+      });
+    });
+  }
+
+  /* --- Navegación: teclado, rueda, táctil, botones --- */
+  bindNav(){
+    document.addEventListener('keydown',e=>{
+      if(document.activeElement && document.activeElement.isContentEditable) return;
+      const k=e.key;
+      if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='PageDown'){e.preventDefault();this.next();}
+      else if(k==='ArrowLeft'||k==='ArrowUp'||k==='PageUp'){e.preventDefault();this.prev();}
+      else if(k==='Home'){this.show(0);}
+      else if(k==='End'){this.show(this.slides.length-1);}
+      else if(k==='o'||k==='O'){this.toggleIndex();}
+      else if(k==='f'||k==='F'){this.fullscreen();}
+      else if(k==='Escape'){this.toggleIndex(false);}
+    });
+
+    let wheelLock=false;
+    window.addEventListener('wheel',e=>{
+      if(wheelLock||Math.abs(e.deltaY)<26) return;
+      wheelLock=true; setTimeout(()=>wheelLock=false,700);
+      e.deltaY>0 ? this.next() : this.prev();
+    },{passive:true});
+
+    let x0=null,y0=null;
+    const vp=document.querySelector('.deck-viewport');
+    vp.addEventListener('touchstart',e=>{x0=e.changedTouches[0].clientX;y0=e.changedTouches[0].clientY;},{passive:true});
+    vp.addEventListener('touchend',e=>{
+      if(x0===null) return;
+      const dx=e.changedTouches[0].clientX-x0, dy=e.changedTouches[0].clientY-y0;
+      if(Math.abs(dx)>46 && Math.abs(dx)>Math.abs(dy)) dx<0 ? this.next() : this.prev();
+      x0=null;
+    },{passive:true});
+
+    document.getElementById('btnNext').onclick=()=>this.next();
+    document.getElementById('btnPrev').onclick=()=>this.prev();
+    document.getElementById('btnIndex').onclick=()=>this.toggleIndex();
+    document.getElementById('btnFull').onclick=()=>this.fullscreen();
+    document.getElementById('navRight').onclick=()=>this.next();
+    document.getElementById('navLeft').onclick=()=>this.prev();
+    window.addEventListener('hashchange',()=>{const i=this.readHash(); if(i!==this.current) this.show(i,true);});
+  }
+
+  toggleIndex(force){
+    const p=document.getElementById('indexPanel');
+    const on = force===undefined ? !p.classList.contains('on') : force;
+    p.classList.toggle('on',on);
+  }
+
+  fullscreen(){
+    if(!document.fullscreenElement) (document.documentElement.requestFullscreen||(()=>{})).call(document.documentElement);
+    else document.exitFullscreen();
+  }
+}
+
+/* ===========================================
+   EDICIÓN EN LÍNEA
+   Tecla E o esquina superior izquierda · Ctrl+S guarda
+   Los cambios se guardan en el navegador (localStorage)
+   =========================================== */
+class Editor{
+  constructor(deck){
+    this.deck=deck; this.isActive=false;
+    this.sel='h1,h2,h3,h4,h5,p,li,td,th,span.lab,.val,.cap,.kicker,.sub,.cite,.eyebrow';
+    this.restore();
+  }
+  key(){ return 'microbiota-deck-v1'; }
+  nodes(){ return document.querySelectorAll('.deck-stage '+this.sel); }
+  toggle(){
+    this.isActive=!this.isActive;
+    document.body.classList.toggle('editing',this.isActive);
+    document.getElementById('editToggle').classList.toggle('active',this.isActive);
+    this.nodes().forEach(n=>n.setAttribute('contenteditable',this.isActive?'true':'false'));
+    if(!this.isActive) this.save();
+    toast(this.isActive?'Modo edición activo · haz clic en cualquier texto · Ctrl+S para guardar':'Modo edición desactivado · cambios guardados');
+  }
+  save(){
+    const data={};
+    document.querySelectorAll('.deck-stage .slide').forEach((s,i)=>{ data[i]=s.innerHTML; });
+    try{ localStorage.setItem(this.key(),JSON.stringify(data)); }catch(e){}
+  }
+  restore(){
+    let data; try{ data=JSON.parse(localStorage.getItem(this.key())||'null'); }catch(e){}
+    if(!data) return;
+    document.querySelectorAll('.deck-stage .slide').forEach((s,i)=>{ if(data[i]) s.innerHTML=data[i]; });
+  }
+  reset(){ try{ localStorage.removeItem(this.key()); }catch(e){} location.reload(); }
+}
+
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('on');
+  clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('on'),2800);
+}
+
+/* El aviso de girar el teléfono se puede descartar */
+document.getElementById('rotateSkip').addEventListener('click',()=>
+  document.getElementById('rotateHint').classList.add('hidden'));
+
+/* === Arranque === */
+const deck = new Deck();
+const editor = new Editor(deck);
+
+/* Modo edición: botón, zona activa con margen de 400 ms, tecla E */
+const hotzone=document.getElementById('editHotzone');
+const editToggle=document.getElementById('editToggle');
+let hideTimeout=null;
+const hideSoon=()=>{ hideTimeout=setTimeout(()=>{ if(!editor.isActive) editToggle.classList.remove('show'); },400); };
+hotzone.addEventListener('mouseenter',()=>{clearTimeout(hideTimeout);editToggle.classList.add('show');});
+hotzone.addEventListener('mouseleave',hideSoon);
+editToggle.addEventListener('mouseenter',()=>clearTimeout(hideTimeout));
+editToggle.addEventListener('mouseleave',hideSoon);
+editToggle.addEventListener('click',()=>editor.toggle());
+hotzone.addEventListener('click',()=>{editToggle.classList.add('show');editor.toggle();});
+document.addEventListener('keydown',e=>{
+  if((e.key==='e'||e.key==='E') && !(document.activeElement&&document.activeElement.isContentEditable)){
+    editToggle.classList.add('show'); editor.toggle();
+  }
+  if((e.ctrlKey||e.metaKey) && (e.key==='s'||e.key==='S')){ e.preventDefault(); editor.save(); toast('Cambios guardados en este navegador'); }
+});
+</script>
+</body>
+</html>
